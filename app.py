@@ -22,7 +22,7 @@ session_store = {
     "cookies": {}
 }
 
-# --- GIAO DIỆN WEB UI ---
+# --- GIAO DIỆN WEB UI TÍCH HỢP CÔNG CỤ CẮT ẢNH (CROPPER.JS) ---
 HTML_LAYOUT = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -32,6 +32,7 @@ HTML_LAYOUT = """
     <title>AOV Theme & Poster Studio Pro</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Cropper.css -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
     <style>
         :root {
@@ -134,6 +135,7 @@ HTML_LAYOUT = """
             overflow-y: auto;
             color: #38bdf8;
         }
+        /* Modal tùy chỉnh màu tối cho Cropper */
         .modal-content {
             background-color: var(--bg-card);
             color: var(--text-main);
@@ -158,6 +160,7 @@ HTML_LAYOUT = """
     </div>
 
     <div class="row g-4">
+        <!-- Cột trái: Cấu hình HAR -->
         <div class="col-lg-5">
             <div class="glass-panel p-4 h-100 d-flex flex-column justify-content-between">
                 <div>
@@ -185,6 +188,7 @@ HTML_LAYOUT = """
             </div>
         </div>
 
+        <!-- Cột phải: Upload & Cắt Ảnh -->
         <div class="col-lg-7">
             <div class="glass-panel p-4">
                 <div class="d-flex align-items-center justify-content-between mb-3">
@@ -228,6 +232,7 @@ HTML_LAYOUT = """
     </div>
 </div>
 
+<!-- Modal Cắt Ảnh (Cropper Modal) -->
 <div class="modal fade" id="cropModal" tabindex="-1" data-bs-backdrop="static" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content p-3">
@@ -254,6 +259,7 @@ HTML_LAYOUT = """
     </div>
 </div>
 
+<!-- Thư viện Cropper.js JS -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
 <script>
@@ -268,12 +274,16 @@ HTML_LAYOUT = """
         reader.onload = (e) => {
             const imageEl = document.getElementById('image-to-crop');
             imageEl.src = e.target.result;
+            
+            // Hiển thị modal cắt ảnh
             const cropModal = new bootstrap.Modal(document.getElementById('cropModal'));
             cropModal.show();
+
+            // Khởi tạo Cropper sau khi modal hiện lên
             setTimeout(() => {
                 if (cropper) cropper.destroy();
                 cropper = new Cropper(imageEl, {
-                    aspectRatio: NaN,
+                    aspectRatio: NaN, // Tự do hoặc có thể cố định tỷ lệ như 16/9, 4/3 nếu muốn
                     viewMode: 1,
                     autoCropArea: 0.9,
                 });
@@ -289,12 +299,17 @@ HTML_LAYOUT = """
 
     function saveCroppedImage() {
         if (!cropper) return;
+        
         cropper.getCroppedCanvas({ maxWidth: 2048, maxHeight: 2048 }).toBlob((blob) => {
             selectedFile = new File([blob], originalRawFile.name || "poster.jpg", { type: "image/jpeg" });
+            
+            // Hiển thị ảnh preview sau khi cắt
             document.getElementById('preview-img').src = URL.createObjectURL(blob);
             document.getElementById('upload-area').classList.add('d-none');
             document.getElementById('preview-box').classList.remove('d-none');
             document.getElementById('upload-btn').disabled = false;
+
+            // Đóng modal
             const modalEl = document.getElementById('cropModal');
             const modal = bootstrap.Modal.getInstance(modalEl);
             modal.hide();
@@ -421,6 +436,7 @@ def upload_image():
     image_file = request.files['image']
 
     try:
+        # Xử lý và tối ưu ảnh bằng Pillow
         img = Image.open(image_file.stream)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
@@ -429,11 +445,9 @@ def upload_image():
         img.save(img_io, format='JPEG', quality=85)
         img_io.seek(0)
 
-        # Gửi đồng thời các biến form key 'file', 'image' và 'link' để Worker chắc chắn bắt được dữ liệu
         files = {
-            'file': ('poster.jpg', img_io, 'image/jpeg'),
             'image': ('poster.jpg', img_io, 'image/jpeg'),
-            'link': (None, '')
+            'file': ('poster.jpg', img_io, 'image/jpeg')
         }
 
         response = requests.post(
