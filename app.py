@@ -22,7 +22,7 @@ session_store = {
     "cookies": {}
 }
 
-# --- GIAO DIỆN WEB UI ---
+# --- GIAO DIỆN WEB UI TÍCH HỢP CÔNG CỤ CẮT ẢNH (CROPPER.JS) ---
 HTML_LAYOUT = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -32,6 +32,8 @@ HTML_LAYOUT = """
     <title>AOV Theme & Poster Studio Pro</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Cropper.css -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
     <style>
         :root {
             --bg-base: #07090e;
@@ -133,6 +135,21 @@ HTML_LAYOUT = """
             overflow-y: auto;
             color: #38bdf8;
         }
+        /* Modal tùy chỉnh màu tối cho Cropper */
+        .modal-content {
+            background-color: var(--bg-card);
+            color: var(--text-main);
+            border: 1px solid var(--border-subtle);
+            border-radius: 16px;
+        }
+        .img-container {
+            max-height: 400px;
+            background: #04060a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .img-container img { max-width: 100%; }
     </style>
 </head>
 <body>
@@ -171,7 +188,7 @@ HTML_LAYOUT = """
             </div>
         </div>
 
-        <!-- Cột phải: Upload Ảnh -->
+        <!-- Cột phải: Upload & Cắt Ảnh -->
         <div class="col-lg-7">
             <div class="glass-panel p-4">
                 <div class="d-flex align-items-center justify-content-between mb-3">
@@ -179,14 +196,14 @@ HTML_LAYOUT = """
                     <i class="fa-solid fa-cloud-arrow-up text-success"></i>
                 </div>
                 <h5 class="fw-bold mb-2">Đẩy Ảnh Lên Server</h5>
-                <p class="text-muted small mb-4">Tự động nén và truyền tải an toàn.</p>
+                <p class="text-muted small mb-4">Chọn ảnh, cắt chỉnh tỷ lệ và gửi đi.</p>
 
                 <div id="upload-area">
                     <div class="drop-zone" id="drop-zone" onclick="document.getElementById('image-input').click()">
                         <i class="fa-solid fa-image fa-3xl text-primary mb-3" style="font-size: 2.5rem;"></i>
                         <p class="mb-1 fw-semibold">Kéo thả ảnh vào đây hoặc bấm để chọn</p>
                         <span class="text-muted small">Hỗ trợ PNG, JPG, WEBP</span>
-                        <input type="file" id="image-input" hidden accept="image/*" onchange="previewFile(this.files[0])">
+                        <input type="file" id="image-input" hidden accept="image/*" onchange="initCropperModal(this.files[0])">
                     </div>
                 </div>
 
@@ -197,9 +214,12 @@ HTML_LAYOUT = """
                             <i class="fa-solid fa-xmark"></i>
                         </button>
                     </div>
+                    <button class="btn btn-outline-info btn-sm w-100 mb-2" onclick="reopenCropper()">
+                        <i class="fa-solid fa-crop me-1"></i> Cắt lại ảnh / Chỉnh sửa khung hình
+                    </button>
                 </div>
 
-                <button id="upload-btn" class="btn btn-gaming w-100 mt-3" onclick="uploadImage()" disabled>
+                <button id="upload-btn" class="btn btn-gaming w-100 mt-2" onclick="uploadImage()" disabled>
                     <i class="fa-solid fa-rocket me-2"></i> Gửi Request Lên Server Garena
                 </button>
 
@@ -212,24 +232,94 @@ HTML_LAYOUT = """
     </div>
 </div>
 
+<!-- Modal Cắt Ảnh (Cropper Modal) -->
+<div class="modal fade" id="cropModal" tabindex="-1" data-bs-backdrop="static" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content p-3">
+            <div class="modal-header border-bottom border-secondary border-opacity-25">
+                <h5 class="modal-title fw-bold text-primary"><i class="fa-solid fa-crop me-2"></i>Cắt & Tùy Chỉnh Khung Hình Poster</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="img-container">
+                    <img id="image-to-crop" src="" alt="Source">
+                </div>
+            </div>
+            <div class="modal-footer border-top border-secondary border-opacity-25 d-flex justify-content-between">
+                <div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="cropper.rotate(90)"><i class="fa-solid fa-rotate-right"></i> Xoay 90°</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="cropper.reset()"><i class="fa-solid fa-rotate-left"></i> Đặt lại</button>
+                </div>
+                <div>
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Hủy</button>
+                    <button type="button" class="btn btn-gaming btn-sm px-4" onclick="saveCroppedImage()">Xác nhận cắt ảnh</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Thư viện Cropper.js JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
 <script>
     let selectedFile = null;
+    let cropper = null;
+    let originalRawFile = null;
 
-    function previewFile(file) {
+    function initCropperModal(file) {
         if (!file) return;
-        selectedFile = file;
+        originalRawFile = file;
         const reader = new FileReader();
         reader.onload = (e) => {
-            document.getElementById('preview-img').src = e.target.result;
-            document.getElementById('upload-area').classList.add('d-none');
-            document.getElementById('preview-box').classList.remove('d-none');
-            document.getElementById('upload-btn').disabled = false;
+            const imageEl = document.getElementById('image-to-crop');
+            imageEl.src = e.target.result;
+            
+            // Hiển thị modal cắt ảnh
+            const cropModal = new bootstrap.Modal(document.getElementById('cropModal'));
+            cropModal.show();
+
+            // Khởi tạo Cropper sau khi modal hiện lên
+            setTimeout(() => {
+                if (cropper) cropper.destroy();
+                cropper = new Cropper(imageEl, {
+                    aspectRatio: NaN, // Tự do hoặc có thể cố định tỷ lệ như 16/9, 4/3 nếu muốn
+                    viewMode: 1,
+                    autoCropArea: 0.9,
+                });
+            }, 200);
         };
         reader.readAsDataURL(file);
     }
 
+    function reopenCropper() {
+        if (!originalRawFile) return;
+        initCropperModal(originalRawFile);
+    }
+
+    function saveCroppedImage() {
+        if (!cropper) return;
+        
+        cropper.getCroppedCanvas({ maxWidth: 2048, maxHeight: 2048 }).toBlob((blob) => {
+            selectedFile = new File([blob], originalRawFile.name || "poster.jpg", { type: "image/jpeg" });
+            
+            // Hiển thị ảnh preview sau khi cắt
+            document.getElementById('preview-img').src = URL.createObjectURL(blob);
+            document.getElementById('upload-area').classList.add('d-none');
+            document.getElementById('preview-box').classList.remove('d-none');
+            document.getElementById('upload-btn').disabled = false;
+
+            // Đóng modal
+            const modalEl = document.getElementById('cropModal');
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            modal.hide();
+        }, 'image/jpeg', 0.9);
+    }
+
     function resetImage() {
         selectedFile = null;
+        originalRawFile = null;
+        if (cropper) { cropper.destroy(); cropper = null; }
         document.getElementById('image-input').value = '';
         document.getElementById('upload-area').classList.remove('d-none');
         document.getElementById('preview-box').classList.add('d-none');
@@ -242,7 +332,7 @@ HTML_LAYOUT = """
     dropZone.ondrop = (e) => {
         e.preventDefault();
         dropZone.classList.remove('dragover');
-        if (e.dataTransfer.files.length) previewFile(e.dataTransfer.files[0]);
+        if (e.dataTransfer.files.length) initCropperModal(e.dataTransfer.files[0]);
     };
 
     async function uploadHAR() {
@@ -278,7 +368,7 @@ HTML_LAYOUT = """
         const consoleBox = document.getElementById('console-output');
         btn.disabled = true;
         btn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>Đang xử lý & đẩy dữ liệu...`;
-        consoleBox.innerText = "Đang nén ảnh và gửi request tới Worker API...";
+        consoleBox.innerText = "Đang truyền tải request tới Worker API...";
 
         const formData = new FormData();
         formData.append('image', selectedFile);
@@ -323,7 +413,6 @@ def parse_har():
         extracted_count = 0
         for entry in entries:
             req = entry.get('request', {})
-            # Quét toàn bộ request, lấy mọi header quan trọng
             for h in req.get('headers', []):
                 name = h.get('name', '').lower()
                 if name in ['authorization', 'cookie', 'x-csrf-token', 'user-agent', 'origin', 'referer']:
@@ -347,7 +436,7 @@ def upload_image():
     image_file = request.files['image']
 
     try:
-        # Nén ảnh bằng Pillow
+        # Xử lý và tối ưu ảnh bằng Pillow
         img = Image.open(image_file.stream)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
@@ -356,7 +445,6 @@ def upload_image():
         img.save(img_io, format='JPEG', quality=85)
         img_io.seek(0)
 
-        # Gửi đồng thời cả 'image' lẫn 'file' để tương thích 100% với Worker code của đối thủ
         files = {
             'image': ('poster.jpg', img_io, 'image/jpeg'),
             'file': ('poster.jpg', img_io, 'image/jpeg')
