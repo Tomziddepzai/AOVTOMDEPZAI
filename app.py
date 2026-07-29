@@ -4,6 +4,11 @@ import io
 import requests
 from flask import Flask, request, jsonify, render_template_string
 from PIL import Image
+from flask import Flask
+from flask_cors import CORS  # Thêm dòng này
+
+app = Flask(__name__)
+CORS(app)  # Bật CORS cho toàn bộ domain truy cập
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Tối đa 16MB
