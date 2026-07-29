@@ -1,166 +1,247 @@
 import os
 import json
-import uuid
-import threading
 import io
 import requests
-from urllib.parse import parse_qs, urlparse
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template_string
+from PIL import Image
 
 app = Flask(__name__)
-JOBS = {}
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Tối đa 16MB
 
-def extract_garena_params(har_data):
-    """Bóc tách các Token cốt lõi từ File HAR"""
-    params = {
-        'openid': '',
-        'access_token': '',
-        'role_id': '',
-        'area_id': '',
-        'upload_url': '',
-        'bind_url': '',
-        'headers': {}
+# Config mặc định cho Proxy API
+WORKER_UPLOAD_URL = "https://proxy-api-garena.meow-web.workers.dev/api/upload"
+
+# Lưu trữ cấu hình Auth trích xuất từ HAR
+session_store = {
+    "headers": {
+        "origin": "https://aov-theme.meow-web.workers.dev",
+        "referer": "https://aov-theme.meow-web.workers.dev/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    },
+    "cookies": {}
+}
+
+# --- GIAO DIỆN WEB UI EMBEDDED ---
+HTML_LAYOUT = """
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AOV Theme & Poster Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; }
+        .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+        .drop-zone {
+            border: 2px dashed #3b82f6;
+            border-radius: 12px;
+            padding: 30px;
+            text-align: center;
+            background-color: #1e293b;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .drop-zone:hover { background-color: #334155; }
+        #preview-img { max-width: 100%; max-height: 300px; border-radius: 8px; display: none; margin: 15px auto; }
+        .btn-custom { background-color: #2563eb; color: white; font-weight: 600; border: none; }
+        .btn-custom:hover { background-color: #1d4ed8; }
+    </style>
+</head>
+<body class="py-5">
+<div class="container" style="max-width: 700px;">
+    <h2 class="text-center mb-4 text-primary fw-bold">AOV Poster / Theme Automation</h2>
+    
+    <!-- Bước 1: Parse HAR File -->
+    <div class="card p-4 mb-4 shadow">
+        <h5 class="card-title text-warning mb-3">1. Cấu hình Session (Tải file HAR)</h5>
+        <div class="input-group">
+            <input type="file" id="har-input" class="form-control" accept=".har">
+            <button class="btn btn-outline-warning" onclick="uploadHAR()">Đọc Token từ HAR</button>
+        </div>
+        <small id="har-status" class="form-text text-muted mt-2">Nạp file HAR lấy từ F12 Network để tự động cập nhật Header/Cookie.</small>
+    </div>
+
+    <!-- Bước 2: Upload ảnh -->
+    <div class="card p-4 shadow">
+        <h5 class="card-title text-success mb-3">2. Tải ảnh & Đẩy lên Server Garena</h5>
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('image-input').click()">
+            <p class="mb-1 fw-bold">Kéo thả ảnh vào đây hoặc nhấp để chọn</p>
+            <span class="text-muted small">Hỗ trợ PNG, JPG, WEBP (Tự động nén & tối ưu)</span>
+            <input type="file" id="image-input" hidden accept="image/*" onchange="previewFile(this.files[0])">
+        </div>
+        <img id="preview-img" alt="Preview Image">
+        
+        <button id="upload-btn" class="btn btn-custom w-100 mt-3 py-2" onclick="uploadImage()" disabled>Tải ảnh lên Server</button>
+        
+        <div id="result-box" class="mt-3 p-3 rounded d-none"></div>
+    </div>
+</div>
+
+<script>
+    let selectedFile = null;
+
+    // Xem trước ảnh
+    function previewFile(file) {
+        if (!file) return;
+        selectedFile = file;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = document.getElementById('preview-img');
+            img.src = e.target.result;
+            img.style.display = 'block';
+            document.getElementById('upload-btn').disabled = false;
+        };
+        reader.readAsDataURL(file);
     }
-    
-    entries = har_data.get('log', {}).get('entries', [])
-    for entry in entries:
-        req = entry.get('request', {})
-        url = req.get('url', '')
+
+    // Drag and Drop
+    const dropZone = document.getElementById('drop-zone');
+    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.backgroundColor = '#334155'; };
+    dropZone.ondragleave = () => { dropZone.style.backgroundColor = '#1e293b'; };
+    dropZone.ondrop = (e) => {
+        e.preventDefault();
+        dropZone.style.backgroundColor = '#1e293b';
+        if (e.dataTransfer.files.length) previewFile(e.dataTransfer.files[0]);
+    };
+
+    // Upload HAR
+    async function uploadHAR() {
+        const fileInput = document.getElementById('har-input');
+        if (!fileInput.files.length) return alert('Vui lòng chọn file .har!');
         
-        # Parse tham số trên URL nếu có
-        parsed_url = urlparse(url)
-        query_params = parse_qs(parsed_url.query)
+        const formData = new FormData();
+        formData.append('har_file', fileInput.files[0]);
+
+        const res = await fetch('/api/parse-har', { method: 'POST', body: formData });
+        const data = await res.json();
+        document.getElementById('har-status').innerText = data.message;
+        document.getElementById('har-status').className = data.success ? "form-text text-success mt-2" : "form-text text-danger mt-2";
+    }
+
+    // Upload Image
+    async function uploadImage() {
+        if (!selectedFile) return;
         
-        if 'openid' in query_params:
-            params['openid'] = query_params['openid'][0]
-        if 'access_token' in query_params or 'token' in query_params:
-            params['access_token'] = query_params.get('access_token', query_params.get('token', ['']))[0]
-        if 'role_id' in query_params:
-            params['role_id'] = query_params['role_id'][0]
+        const btn = document.getElementById('upload-btn');
+        const resultBox = document.getElementById('result-box');
+        btn.disabled = true;
+        btn.innerText = "Đang xử lý & Upload...";
+        resultBox.className = "mt-3 p-3 rounded d-none";
+
+        const formData = new FormData();
+        formData.append('image', selectedFile);
+
+        try {
+            const res = await fetch('/api/upload-image', { method: 'POST', body: formData });
+            const data = await res.json();
             
-        # Tìm URL Upload và URL Save/Bind Poster
-        if 'upload' in url.lower() and req.get('method') == 'POST':
-            params['upload_url'] = url
-            for h in req.get('headers', []):
-                if h['name'].lower() not in ['content-length', 'host']:
-                    params['headers'][h['name']] = h['value']
-                    
-        elif any(k in url.lower() for k in ['save', 'set', 'bind', 'confirm', 'poster']) and req.get('method') == 'POST':
-            params['bind_url'] = url
-
-    return params
-
-def extract_garena_params(har_data):
-    """Bóc tách Token & URL từ File HAR một cách linh hoạt"""
-    entries = har_data.get('log', {}).get('entries', [])
-    
-    post_requests = []
-    
-    for entry in entries:
-        req = entry.get('request', {})
-        method = req.get('method', '')
-        url = req.get('url', '')
-        
-        # Bỏ qua các URL rác (Analytics, Ads...)
-        if any(ignore in url.lower() for ignore in ['facebook', 'google', 'doubleclick', 'analytics', 'gtag']):
-            continue
-            
-        if method in ['POST', 'PUT']:
-            headers = {}
-            for h in req.get('headers', []):
-                if h['name'].lower() not in ['content-length', 'host']:
-                    headers[h['name']] = h['value']
-            
-            post_requests.append({
-                'url': url,
-                'headers': headers,
-                'body': req.get('postData', {}).get('text', '')
-            })
-
-    return post_requests
-
-def process_full_garena_flow(job_id, har_stream, image_bytes):
-    try:
-        JOBS[job_id] = {'status': 'pending', 'message': '1/3 - Đang đọc file HAR...'}
-        
-        har_data = json.load(har_stream)
-        post_requests = extract_garena_params(har_data)
-
-        # Nếu không có request POST nào trong file HAR
-        if not post_requests:
-            JOBS[job_id] = {
-                'status': 'error', 
-                'message': 'File HAR không chứa bất kỳ lệnh POST/Upload nào! Bạn nhớ bấm nút "LƯU/XÁC NHẬN" trong game lúc bắt gói tin nhé.'
+            resultBox.classList.remove('d-none');
+            if (data.success) {
+                resultBox.className = "mt-3 p-3 rounded alert-success bg-success text-white";
+                resultBox.innerHTML = `<strong>Thành công!</strong><br>Response Server: <pre class="mb-0 text-white">${JSON.stringify(data.data, null, 2)}</pre>`;
+            } else {
+                resultBox.className = "mt-3 p-3 rounded alert-danger bg-danger text-white";
+                resultBox.innerHTML = `<strong>Lỗi:</strong> ${data.error}`;
             }
-            return
-
-        # Tự động chọn Request POST liên quan đến Garena / Moba / Tencent
-        target_req = None
-        for req in post_requests:
-            url_lower = req['url'].lower()
-            if any(k in url_lower for k in ['garena', 'moba', 'aov', 'qq.com', 'myqcloud', 'cdngarena', 'kgvn']):
-                target_req = req
-                break
-        
-        # Nếu vẫn không lọc được, lấy luôn Request POST đầu tiên
-        if not target_req and len(post_requests) > 0:
-            target_req = post_requests[0]
-
-        upload_url = target_req['url']
-        headers = target_req['headers']
-
-        JOBS[job_id] = {'status': 'pending', 'message': f'2/3 - Đang đẩy ảnh lên API: {upload_url[:40]}...'}
-
-        # Gửi ảnh lên URL tìm được
-        files = {'file': ('poster.png', image_bytes, 'image/png')}
-        upload_res = requests.post(upload_url, headers=headers, files=files, timeout=20)
-
-        if upload_res.status_code in [200, 201]:
-            JOBS[job_id] = {
-                'status': 'success', 
-                'poster_id': job_id[:8].upper(), 
-                'message': 'Đã gửi lệnh Upload thành công! Hãy vào Game kiểm tra.'
-            }
-        else:
-            JOBS[job_id] = {
-                'status': 'error', 
-                'message': f'Garena từ chối (Mã {upload_res.status_code}). URL đã thử: {upload_url}'
-            }
-
-    except Exception as e:
-        JOBS[job_id] = {'status': 'error', 'message': f'Lỗi đọc file HAR: {str(e)}'}
-
+        } catch (err) {
+            resultBox.classList.remove('d-none');
+            resultBox.className = "mt-3 p-3 rounded alert-danger bg-danger text-white";
+            resultBox.innerHTML = `<strong>Lỗi kết nối:</strong> ${err.message}`;
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "Tải ảnh lên Server";
+        }
+    }
+</script>
+</body>
+</html>
+"""
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template_string(HTML_LAYOUT)
 
-@app.route('/api/upload', methods=['POST'])
-def api_upload():
-    image_file = request.files.get('image')
-    har_file = request.files.get('har_file')
+# 1. API bóc tách File HAR
+@app.route('/api/parse-har', methods=['POST'])
+def parse_har():
+    if 'har_file' not in request.files:
+        return jsonify({"success": False, "message": "Không tìm thấy file HAR"}), 400
+    
+    file = request.files['har_file']
+    try:
+        har_data = json.load(file)
+        entries = har_data.get('log', {}).get('entries', [])
+        
+        extracted_count = 0
+        for entry in entries:
+            req = entry.get('request', {})
+            url = req.get('url', '')
+            if 'garena' in url or 'upload' in url:
+                # Trích xuất Headers
+                for h in req.get('headers', []):
+                    name = h.get('name', '').lower()
+                    if name in ['authorization', 'user-agent', 'origin', 'referer']:
+                        session_store["headers"][name] = h.get('value')
+                
+                # Trích xuất Cookies
+                for c in req.get('cookies', []):
+                    session_store["cookies"][c.get('name')] = c.get('value')
+                
+                extracted_count += 1
+                
+        return jsonify({
+            "success": True, 
+            "message": f"Đã trích xuất thành công {extracted_count} request liên quan từ HAR!"
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Lỗi đọc file HAR: {str(e)}"}), 500
 
-    if not image_file or not har_file:
-        return jsonify({'success': False, 'error': 'Thiếu file ảnh hoặc file HAR!'}), 400
+# 2. API Xử lý nén ảnh & Upload sang Server Garena
+@app.route('/api/upload-image', methods=['POST'])
+def upload_image():
+    if 'image' not in request.files:
+        return jsonify({"success": False, "error": "Chưa chọn file ảnh"}), 400
 
-    job_id = uuid.uuid4().hex[:16]
-    JOBS[job_id] = {'status': 'pending', 'message': 'Khởi tạo Hàng đợi...'}
+    image_file = request.files['image']
 
-    image_bytes = image_file.read()
-    har_bytes = io.BytesIO(har_file.read())
+    try:
+        # Nén/Chuyển đổi định dạng ảnh bằng Pillow trước khi upload
+        img = Image.open(image_file.stream)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+            
+        img_io = io.BytesIO()
+        img.save(img_io, format='JPEG', quality=85)
+        img_io.seek(0)
 
-    # Chạy ngầm quy trình 2 bước
-    thread = threading.Thread(target=process_full_garena_flow, args=(job_id, har_bytes, image_bytes))
-    thread.start()
+        # Chuẩn bị payload multipart/form-data đẩy sang Cloudflare Worker / Garena API
+        files = {
+            'image': ('poster.jpg', img_io, 'image/jpeg')
+        }
 
-    return jsonify({'success': True, 'job_id': job_id})
+        response = requests.post(
+            WORKER_UPLOAD_URL,
+            headers=session_store["headers"],
+            cookies=session_store["cookies"],
+            files=files,
+            timeout=30
+        )
 
-@app.route('/api/check/<job_id>', methods=['GET'])
-def api_check(job_id):
-    job = JOBS.get(job_id)
-    if not job:
-        return jsonify({'success': False, 'error': 'Mã Job không tồn tại!'}), 404
-    return jsonify({'success': True, 'data': job})
+        try:
+            res_data = response.json()
+        except:
+            res_data = response.text
+
+        return jsonify({
+            "success": response.ok,
+            "status_code": response.status_code,
+            "data": res_data
+        })
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
+    print(">>> App đang chạy tại: http://127.0.0.1:5000")
     app.run(host='0.0.0.0', port=5000, debug=True)
