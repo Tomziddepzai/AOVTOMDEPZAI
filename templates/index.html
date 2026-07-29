@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AOV Poster Generator</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family: 'Inter', sans-serif; background: #090d16; color: #fff; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 15px; }
+        .container { width: 100%; max-width: 440px; background: #111827; border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 25px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); text-align: center; }
+        h1 { font-size: 1.8rem; color: #38bdf8; margin-bottom: 20px; font-weight: 700; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+        .tab-btn { flex: 1; padding: 10px; background: #1f2937; border: 1px solid #374151; color: #9ca3af; border-radius: 10px; font-weight: 600; cursor: pointer; }
+        .tab-btn.active { background: #38bdf8; color: #000; border-color: #38bdf8; }
+        .upload-box { background: rgba(255,255,255,0.03); border: 1px dashed rgba(255,255,255,0.2); border-radius: 12px; padding: 20px; cursor: pointer; margin-bottom: 15px; }
+        .image-box { width: 100%; height: 220px; border: 2px dashed rgba(255,255,255,0.2); border-radius: 12px; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: pointer; margin-bottom: 15px; position: relative; }
+        #imagePreview { width: 100%; height: 100%; object-fit: contain; display: none; }
+        .btn-glow { width: 100%; padding: 14px; background: linear-gradient(135deg, #38bdf8 0%, #3b82f6 100%); border: none; border-radius: 10px; color: #fff; font-weight: 700; cursor: pointer; font-size: 15px; }
+        .btn-glow:disabled { opacity: 0.5; cursor: not-allowed; }
+        .hidden { display: none !important; }
+        #cropModal { position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 99; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+        .crop-container { width: 100%; max-width: 380px; height: 60vh; background: #000; border-radius: 12px; overflow: hidden; }
+        .status-box { padding: 15px; border-radius: 10px; font-size: 14px; margin-top: 15px; text-align: left; }
+        .status-success { background: rgba(16,185,129,0.1); border: 1px solid #10b981; color: #34d399; }
+        .status-error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #f87171; }
+        .status-pending { background: rgba(59,130,246,0.1); border: 1px solid #3b82f6; color: #60a5fa; }
+    </style>
+</head>
+<body>
+
+<div id="cropModal" class="hidden">
+    <h3 style="margin-bottom: 15px;">Cắt Ảnh Poster (1080x1701)</h3>
+    <div class="crop-container"><img id="imageToCrop"></div>
+    <div style="margin-top: 15px; display: flex; gap: 10px;">
+        <button onclick="closeCropModal()" style="padding:10px 20px; background:#374151; color:#fff; border:none; border-radius:8px;">HỦY</button>
+        <button onclick="applyCrop()" style="padding:10px 20px; background:#38bdf8; color:#000; font-weight:bold; border:none; border-radius:8px;">XÁC NHẬN CẮT</button>
+    </div>
+</div>
+
+<div class="container">
+    <h1>AOV POSTER AUTO</h1>
+
+    <div class="tabs">
+        <button class="tab-btn active" id="tabToolBtn" onclick="switchTab('tool')">Tạo Poster</button>
+        <button class="tab-btn" id="tabCheckBtn" onclick="switchTab('check')">Tra Cứu</button>
+    </div>
+
+    <div id="tab-tool">
+        <div class="upload-box" onclick="document.getElementById('harFile').click()">
+            <i class="fa-solid fa-file-code" style="font-size: 2rem; color: #38bdf8; margin-bottom: 8px;"></i>
+            <p id="harText" style="font-size: 13px;">Tải lên File .HAR (iOS)</p>
+            <input type="file" id="harFile" accept=".har" class="hidden" onchange="handleHar(event)">
+        </div>
+
+        <div class="image-box" onclick="document.getElementById('imgFile').click()">
+            <div id="imgPlaceholder">
+                <i class="fa-solid fa-image" style="font-size: 2rem; color: #6b7280; margin-bottom: 8px;"></i>
+                <p style="font-size: 13px; color: #9ca3af;">Chọn ảnh muốn thay</p>
+            </div>
+            <img id="imagePreview">
+            <input type="file" id="imgFile" accept="image/*" class="hidden" onchange="handleImage(event)">
+        </div>
+
+        <button class="btn-glow" id="btnSend" onclick="submitJob()">GỬI YÊU CẦU LÊN SERVER</button>
+    </div>
+
+    <div id="tab-check" class="hidden">
+        <input type="text" id="jobIdInput" placeholder="Nhập mã 16 số tra cứu..." style="width:100%; padding:12px; background:#1f2937; border:1px solid #374151; border-radius:8px; color:#fff; text-align:center; font-family:monospace; margin-bottom:12px;">
+        <button class="btn-glow" id="btnCheck" onclick="checkStatus(false)">KIỂM TRA TIẾN TRÌNH</button>
+        <div id="checkResult" class="hidden"></div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+<script>
+    let cropper, croppedBlob = null, selectedHar = null, checkInterval = null;
+
+    function switchTab(tab) {
+        document.getElementById('tab-tool').classList.toggle('hidden', tab !== 'tool');
+        document.getElementById('tab-check').classList.toggle('hidden', tab !== 'check');
+        document.getElementById('tabToolBtn').classList.toggle('active', tab === 'tool');
+        document.getElementById('tabCheckBtn').classList.toggle('active', tab === 'check');
+    }
+
+    function handleHar(e) {
+        selectedHar = e.target.files[0];
+        if (selectedHar) document.getElementById('harText').innerText = '✓ ' + selectedHar.name;
+    }
+
+    function handleImage(e) {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = ev => {
+                document.getElementById('cropModal').classList.remove('hidden');
+                const img = document.getElementById('imageToCrop');
+                img.src = ev.target.result;
+                if (cropper) cropper.destroy();
+                cropper = new Cropper(img, { aspectRatio: 1080/1701, viewMode: 1 });
+            };
+            reader.readAsDataURL(file);
+        }
+        e.target.value = '';
+    }
+
+    function closeCropModal() {
+        document.getElementById('cropModal').classList.add('hidden');
+        if (cropper) cropper.destroy();
+    }
+
+    function applyCrop() {
+        const canvas = cropper.getCroppedCanvas({ width: 1080, height: 1701 });
+        document.getElementById('imgPlaceholder').classList.add('hidden');
+        const prev = document.getElementById('imagePreview');
+        prev.src = canvas.toDataURL('image/png');
+        prev.style.display = 'block';
+        canvas.toBlob(blob => { croppedBlob = blob; }, 'image/png');
+        closeCropModal();
+    }
+
+    async function submitJob() {
+        if (!croppedBlob) return Swal.fire('Lỗi', 'Vui lòng chọn và cắt ảnh!', 'warning');
+        if (!selectedHar) return Swal.fire('Lỗi', 'Vui lòng chọn file .HAR!', 'warning');
+
+        const btn = document.getElementById('btnSend');
+        btn.disabled = true; btn.innerText = "ĐANG TẢI LÊN MÁY CHỦ...";
+
+        const formData = new FormData();
+        formData.append('image', croppedBlob, 'poster.png');
+        formData.append('har_file', selectedHar);
+
+        try {
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (data.success) {
+                document.getElementById('jobIdInput').value = data.job_id;
+                Swal.fire('Thành công', 'Đã nhận Job! Mã: ' + data.job_id, 'success');
+                switchTab('check');
+                checkStatus(true);
+                if (checkInterval) clearInterval(checkInterval);
+                checkInterval = setInterval(() => checkStatus(true), 5000);
+            } else {
+                Swal.fire('Thất bại', data.error, 'error');
+            }
+        } catch (err) {
+            Swal.fire('Lỗi', 'Không kết nối được Server!', 'error');
+        } finally {
+            btn.disabled = false; btn.innerText = "GỬI YÊU CẦU LÊN SERVER";
+        }
+    }
+
+    async function checkStatus(isAuto = false) {
+        const jobId = document.getElementById('jobIdInput').value.trim();
+        if (!jobId) return;
+
+        const resBox = document.getElementById('checkResult');
+        try {
+            const res = await fetch(`/api/check/${jobId}`);
+            const result = await res.json();
+            resBox.classList.remove('hidden');
+
+            if (result.success) {
+                const data = result.data;
+                if (data.status === 'success') {
+                    clearInterval(checkInterval);
+                    resBox.className = 'status-box status-success';
+                    resBox.innerHTML = `🎉 <b>THÀNH CÔNG!</b><br>ID Poster: ${data.poster_id}<br>${data.message}`;
+                } else if (data.status === 'error') {
+                    clearInterval(checkInterval);
+                    resBox.className = 'status-box status-error';
+                    resBox.innerHTML = `❌ <b>LỖI:</b> ${data.message}`;
+                } else {
+                    resBox.className = 'status-box status-pending';
+                    resBox.innerHTML = `⏳ <b>ĐANG XỬ LÝ...</b><br>${data.message}`;
+                }
+            }
+        } catch (err) {
+            if (!isAuto) Swal.fire('Lỗi', 'Mất kết nối tới Server!', 'error');
+        }
+    }
+</script>
+</body>
+</html>
