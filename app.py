@@ -22,7 +22,7 @@ session_store = {
     "cookies": {}
 }
 
-# --- GIAO DIỆN WEB UI: SIÊU ĐẸP, HIỆN ĐẠI, CÓ TERMINAL LOG TRỰC QUAN ---
+# --- GIAO DIỆN WEB UI ---
 HTML_LAYOUT = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -57,7 +57,6 @@ HTML_LAYOUT = """
             border: 1px solid var(--border-subtle); 
             border-radius: 16px; 
             box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(10px);
         }
         .step-badge {
             background: rgba(59, 130, 246, 0.1);
@@ -138,14 +137,13 @@ HTML_LAYOUT = """
 </head>
 <body>
 <div class="container-custom px-3">
-    <!-- Header -->
     <div class="text-center mb-5">
         <h1 class="fw-bold text-primary mb-2"><i class="fa-solid fa-gamepad me-2"></i>AOV POSTER STUDIO PRO</h1>
         <p class="text-muted small">Hệ thống bóc tách Session HAR & Tự động đẩy Theme/Poster lên Garena Worker API</p>
     </div>
 
     <div class="row g-4">
-        <!-- Cột trái: Cấu hình & Trạng thái HAR -->
+        <!-- Cột trái: Cấu hình HAR -->
         <div class="col-lg-5">
             <div class="glass-panel p-4 h-100 d-flex flex-column justify-content-between">
                 <div>
@@ -154,7 +152,7 @@ HTML_LAYOUT = """
                         <i class="fa-solid fa-key text-warning"></i>
                     </div>
                     <h5 class="fw-bold mb-2">Nạp Session HAR</h5>
-                    <p class="text-muted small mb-4">Chọn file `.har` thu thập từ F12 (Network) trong lúc thao tác trên web gốc để hệ thống tự bắt Token/Cookie.</p>
+                    <p class="text-muted small mb-4">Chọn file `.har` thu thập từ F12 (Network) khi thao tác.</p>
                     
                     <div class="mb-3">
                         <input type="file" id="har-input" class="form-control mb-3" accept=".har">
@@ -173,7 +171,7 @@ HTML_LAYOUT = """
             </div>
         </div>
 
-        <!-- Cột phải: Upload Ảnh & Kết quả Server -->
+        <!-- Cột phải: Upload Ảnh -->
         <div class="col-lg-7">
             <div class="glass-panel p-4">
                 <div class="d-flex align-items-center justify-content-between mb-3">
@@ -181,9 +179,8 @@ HTML_LAYOUT = """
                     <i class="fa-solid fa-cloud-arrow-up text-success"></i>
                 </div>
                 <h5 class="fw-bold mb-2">Đẩy Ảnh Lên Server</h5>
-                <p class="text-muted small mb-4">Hệ thống sẽ tự động tối ưu & nén ảnh trước khi gọi API.</p>
+                <p class="text-muted small mb-4">Tự động nén và truyền tải an toàn.</p>
 
-                <!-- Vùng chọn ảnh -->
                 <div id="upload-area">
                     <div class="drop-zone" id="drop-zone" onclick="document.getElementById('image-input').click()">
                         <i class="fa-solid fa-image fa-3xl text-primary mb-3" style="font-size: 2.5rem;"></i>
@@ -193,7 +190,6 @@ HTML_LAYOUT = """
                     </div>
                 </div>
 
-                <!-- Vùng Preview Ảnh -->
                 <div id="preview-box" class="d-none">
                     <div class="preview-box-wrapper mb-3">
                         <img id="preview-img" alt="Preview">
@@ -207,7 +203,6 @@ HTML_LAYOUT = """
                     <i class="fa-solid fa-rocket me-2"></i> Gửi Request Lên Server Garena
                 </button>
 
-                <!-- Console Phản hồi từ Server -->
                 <div class="mt-4">
                     <label class="text-muted small mb-2 fw-semibold"><i class="fa-solid fa-code me-1"></i> Console Log / Phản hồi Server:</label>
                     <div id="console-output" class="console-terminal">Chờ thực thi lệnh...</div>
@@ -294,9 +289,9 @@ HTML_LAYOUT = """
             
             consoleBox.innerText = JSON.stringify(data, null, 2);
             if (data.success) {
-                consoleBox.style.color = "#4ade80"; // X éxito
+                consoleBox.style.color = "#4ade80";
             } else {
-                consoleBox.style.color = "#f87171"; // Đỏ lỗi
+                consoleBox.style.color = "#f87171";
             }
         } catch (err) {
             consoleBox.style.color = "#f87171";
@@ -328,19 +323,18 @@ def parse_har():
         extracted_count = 0
         for entry in entries:
             req = entry.get('request', {})
-            url = req.get('url', '')
-            if any(k in url.lower() for k in ['garena', 'upload', 'auth', 'theme', 'api']):
-                for h in req.get('headers', []):
-                    name = h.get('name', '').lower()
-                    if name in ['authorization', 'user-agent', 'origin', 'referer', 'cookie']:
-                        session_store["headers"][name] = h.get('value')
-                for c in req.get('cookies', []):
-                    session_store["cookies"][c.get('name')] = c.get('value')
-                extracted_count += 1
+            # Quét toàn bộ request, lấy mọi header quan trọng
+            for h in req.get('headers', []):
+                name = h.get('name', '').lower()
+                if name in ['authorization', 'cookie', 'x-csrf-token', 'user-agent', 'origin', 'referer']:
+                    session_store["headers"][name] = h.get('value')
+            for c in req.get('cookies', []):
+                session_store["cookies"][c.get('name')] = c.get('value')
+            extracted_count += 1
                 
         return jsonify({
             "success": True, 
-            "message": f"Đã bóc tách thành công {extracted_count} request xác thực từ HAR!"
+            "message": f"Đã quét và nạp toàn bộ Session từ {extracted_count} request trong HAR!"
         })
     except Exception as e:
         return jsonify({"success": False, "message": f"Lỗi đọc file HAR: {str(e)}"}), 500
@@ -362,8 +356,10 @@ def upload_image():
         img.save(img_io, format='JPEG', quality=85)
         img_io.seek(0)
 
+        # Gửi đồng thời cả 'image' lẫn 'file' để tương thích 100% với Worker code của đối thủ
         files = {
-            'image': ('poster.jpg', img_io, 'image/jpeg')
+            'image': ('poster.jpg', img_io, 'image/jpeg'),
+            'file': ('poster.jpg', img_io, 'image/jpeg')
         }
 
         response = requests.post(
