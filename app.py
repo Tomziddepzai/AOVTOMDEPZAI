@@ -1,7 +1,6 @@
 import os
 import json
 import io
-import base64
 import requests
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
@@ -13,12 +12,12 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Tối đa 16MB
 
 WORKER_UPLOAD_URL = "https://proxy-api-garena.meow-web.workers.dev/api/upload"
 
-# Bộ lưu trữ Session & Token bóc tách từ file HAR
+# Bộ lưu trữ Session & Token bóc tách từ file HAR (có giá trị mặc định an toàn)
 session_store = {
     "headers": {
         "origin": "https://aov-theme.meow-web.workers.dev",
         "referer": "https://aov-theme.meow-web.workers.dev/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     },
     "cookies": {}
 }
@@ -399,17 +398,31 @@ def parse_har():
         extracted_count = 0
         for entry in entries:
             req = entry.get('request', {})
-            for h in req.get('headers', []):
-                name = h.get('name', '').lower()
-                if name in ['authorization', 'cookie', 'x-csrf-token', 'user-agent', 'origin', 'referer']:
-                    session_store["headers"][name] = h.get('value')
-            for c in req.get('cookies', []):
-                session_store["cookies"][c.get('name')] = c.get('value')
-            extracted_count += 1
+            url = req.get('url', '')
+            
+            # Ưu tiên lấy từ các request liên quan đến domain worker hoặc có chứa thông tin auth/cookie
+            headers = req.get('headers', [])
+            cookies = req.get('cookies', [])
+            
+            has_auth_or_cookie = any(h.get('name', '').lower() in ['authorization', 'cookie', 'x-csrf-token'] for h in headers) or len(cookies) > 0
+            
+            if "workers.dev" in url or has_auth_or_cookie:
+                for h in headers:
+                    name = h.get('name', '').lower()
+                    if name in ['authorization', 'cookie', 'x-csrf-token', 'user-agent', 'origin', 'referer']:
+                        val = h.get('value')
+                        if val:
+                            session_store["headers"][name] = val
+                for c in cookies:
+                    c_name = c.get('name')
+                    c_val = c.get('value')
+                    if c_name and c_val:
+                        session_store["cookies"][c_name] = c_val
+                extracted_count += 1
                 
         return jsonify({
             "success": True, 
-            "message": f"Đã quét và nạp toàn bộ Session từ {extracted_count} request trong HAR!"
+            "message": f"Đã quét và nạp thành công Session từ {extracted_count} request trọng tâm trong file HAR!"
         })
     except Exception as e:
         return jsonify({"success": False, "message": f"Lỗi đọc file HAR: {str(e)}"}), 500
@@ -428,27 +441,21 @@ def upload_image():
             
         img_io = io.BytesIO()
         img.save(img_io, format='JPEG', quality=85)
-        img_bytes = img_io.getvalue()
+        img_io.seek(0)
         
-        # Chuyển ảnh thành chuỗi Base64 Data URI để đáp ứng đúng yêu cầu trường 'link' của Cloudflare Worker
-        encoded_img = base64.b64encode(img_bytes).decode('utf-8')
-        data_url = f"data:image/jpeg;base64,{encoded_img}"
-
-        # Làm sạch headers và đặt Content-Type thành application/json
+        # Làm sạch headers (loại bỏ các content-type cũ để requests tự sinh boundary chuẩn multipart)
         clean_headers = {k: v for k, v in session_store["headers"].items() if not k.lower().startswith('content-')}
-        clean_headers['content-type'] = 'application/json'
 
-        payload = {
-            "link": data_url,
-            "image": data_url,
-            "file": data_url
+        # Đóng gói file gửi đi dạng nhị phân multipart/form-data chính xác như cURL
+        files = {
+            'image': ('poster.jpg', img_io, 'image/jpeg')
         }
 
         response = requests.post(
             WORKER_UPLOAD_URL,
             headers=clean_headers,
             cookies=session_store["cookies"],
-            json=payload,
+            files=files,
             timeout=30
         )
 
