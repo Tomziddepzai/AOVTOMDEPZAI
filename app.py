@@ -433,46 +433,73 @@ def upload_image():
         return jsonify({"success": False, "error": "Chưa chọn file ảnh"}), 400
 
     image_file = request.files['image']
-
+    
     try:
+        # 1. Process image to JPEG
         img = Image.open(image_file.stream)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
-            
         img_io = io.BytesIO()
         img.save(img_io, format='JPEG', quality=85)
         img_io.seek(0)
-        
-        # Làm sạch headers (loại bỏ các content-type cũ để requests tự sinh boundary chuẩn multipart)
-        clean_headers = {k: v for k, v in session_store["headers"].items() if not k.lower().startswith('content-')}
 
-        # Đóng gói file gửi đi dạng nhị phân multipart/form-data chính xác như cURL
+        # 2. Clean headers (remove Content-* to let requests auto-generate boundary)
+        clean_headers = {
+            k: v for k, v in session_store["headers"].items() 
+            if not k.lower().startswith('content-')
+        }
+        # Ensure critical headers are present
+        if 'user-agent' not in clean_headers:
+            clean_headers['user-agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        if 'origin' not in clean_headers:
+            clean_headers['origin'] = 'https://aov-theme.meow-web.workers.dev'
+        if 'referer' not in clean_headers:
+            clean_headers['referer'] = 'https://aov-theme.meow-web.workers.dev/'
+
+        # 3. Prepare multipart data with correct field name
+        #    Server expects field "file" (not "image") per error message.
         files = {
-            'image': ('poster.jpg', img_io, 'image/jpeg')
+            'file': ('poster.jpg', img_io, 'image/jpeg')
+        }
+        # Optional additional data if server requires type or link
+        data = {
+            'type': 'image'   # Adjust if needed, e.g., 'theme' or 'poster'
         }
 
+        # 4. Send request with debug logging (prints to Flask console)
+        app.logger.debug(f"Sending to {WORKER_UPLOAD_URL}")
+        app.logger.debug(f"Headers: {clean_headers}")
+        app.logger.debug(f"Cookies: {session_store['cookies']}")
+        
         response = requests.post(
             WORKER_UPLOAD_URL,
             headers=clean_headers,
             cookies=session_store["cookies"],
             files=files,
+            data=data,           # send extra form fields
             timeout=30
         )
 
+        # 5. Parse response
         try:
             res_data = response.json()
-        except:
-            res_data = response.text
+        except ValueError:
+            res_data = {"raw_text": response.text}
 
+        # 6. Return full debug info
         return jsonify({
-            "success": response.ok,
+            "success": response.status_code == 200,
             "status_code": response.status_code,
-            "data": res_data
+            "sent_fields": list(files.keys()) + list(data.keys()),
+            "response": res_data,
+            "cookies_used": session_store["cookies"]
         })
 
     except Exception as e:
+        app.logger.error(f"Upload error: {str(e)}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
     print(">>> App đang chạy tại: http://127.0.0.1:5000")
     app.run(host='0.0.0.0', port=5000, debug=True)
+    app.logger.setLevel(logging.DEBUG)
